@@ -14,21 +14,31 @@ function motionQA(pathToFile, options)
 %with useful metadata as well as the metrics. By request, a PDF can also or
 %instead be generated with much of the same information.
 %
-%Options: dvarsThresh - A 1x2 matrix specifying the quality boundaries for
-%                       the DVARS metric.
-%         fixedImage  - Can be an integer, specifying the timepoint of the
-%                       volume to be used as the coregistration reference.
-%                       Or, optionally, can be one of the words, "first",
-%                       "middle", or "last" supplied as a char or string
-%                       vector. The default is the middle volume.
-%         silent      - A boolean that will suppress all graphical output
-%                       so that this tool can be used in a non-interactive
-%                       workflow. Supression happens when true. Default is
-%                       false.
-%         jsonOutput  - A boolean that will demand or suppress generation 
-%                       of the json sidecar. Default is false.
-%         pdfOutput   - A boolean that will demand or suppress generation
-%                       of the PDF report. Default is true.
+%Options: dvarsThresh   - A 1x2 matrix specifying the quality boundaries for
+%                         the DVARS metric.
+%         regQualThresh - A 1x2 matrix specifying the quality bodaries and
+%                         the flagging threshold for the quality of image
+%                         registration. Note that this metric is reversed
+%                         compared to the others, where low values indicate
+%                         low quality, so the order of the low and high
+%                         values in this option are "backwards."
+%         fixedImage    - Can be an integer, specifying the timepoint of the
+%                         volume to be used as the coregistration reference.
+%                         Or, optionally, can be one of the words, "first",
+%                         "middle", or "last" supplied as a char or string
+%                         vector. The default is the middle volume.
+%         silent        - A boolean that will suppress all graphical output
+%                         so that this tool can be used in a non-interactive
+%                         workflow. Supression happens when true. Default is
+%                         false.
+%         jsonOutput    - A boolean that will demand or suppress generation 
+%                         of the json sidecar. Default is false.
+%         pdfOutput     - A boolean that will demand or suppress generation
+%                         of the PDF report. Default is true.
+%         timing        - A boolean that selects the command line output of
+%                         various timing metrics. Note that if the silent
+%                         option is set true, the timing metrics will not
+%                         be printed, regardless of how this is set.
 %
 %Options syntax: All options should be set as arguments. For example ...
 %                motionQA(fixedImage = 'first', pdfOutput = false)
@@ -37,14 +47,24 @@ function motionQA(pathToFile, options)
 %https://github.com/jeffreyluci/Neuro-tools/tree/main/motionQA
 %Version History:
 %20260824: Initial Release
+%20260828: Fixed first image coregistration bug. Switched to tiled layout
+%          instead of subplot to gain more granular control over figure
+%          layout properties. Added coregistration quality metric. Moved
+%          timing feature to an option. Fixed figure display bug that was
+%          inconsistent with silent option.
 
+% Note that below, unlike the other thresholds, regQualThresh are LOWER 
+% bounds - values below element 2 are red (poor registration), below 
+% element 1 are yellow.
 arguments
     pathToFile char = []
     options.dvarsThresh = [7, 10];
+    options.regQualThresh = [0.9 0.8];
     options.fixedImage
     options.silent     (1,1) logical = false
     options.jsonOutput (1,1) logical = true
     options.pdfOutput  (1,1) logical = true
+    options.timing     (1,1) logical = false
 end
 
 if ~isempty(pathToFile)
@@ -56,7 +76,7 @@ end
 stats.software.name = 'motionQA';
 stats.software.author = 'Jeffrey Luci <jeffrey.luci@rutgers.edu>';
 stats.software.URL = 'TBD GitHub';
-stats.software.version = '20260824';
+stats.software.version = '20260828';
 
 if options.pdfOutput
     import mlreportgen.dom.* %#ok<*SIMPT>
@@ -190,7 +210,9 @@ if options.fixedImage>size(IM,4) || options.fixedImage<1
 end
 
 imageReadTime = toc(startTime);
-fprintf('Time to read in images: %0.1f seconds.\n', imageReadTime);
+if options.timing && ~options.silent
+    fprintf('Time to read in images: %0.1f seconds.\n', imageReadTime);
+end
 coregStart = tic;
 
 numVolumes = size(IM, 4);
@@ -199,15 +221,22 @@ numVolumes = size(IM, 4);
 translations = zeros(numVolumes, 3); % [Tx Ty Tz] in mm
 rotations    = zeros(numVolumes, 3); % [Yaw Pitch Roll] in degrees
 rot_rad      = zeros(numVolumes, 3); % in radians
+regQuality   = zeros(numVolumes, 1);
 FD           = zeros(numVolumes,1);
 rmsFD        = zeros(numVolumes,1);  % used in FSL
 tform        = cell(numVolumes,1);
 tform{1}     = affine3d(eye(4));
-dT = [0,0,0]; 
+dT = [0,0,0]; %#ok<*NASGU>
 dR = [0,0,0];
 
 % Reference volume (default = first one)
 fixed = IM(:,:,:,options.fixedImage);
+
+% Reference view & brain mask for scoring how well each registered frame
+% matches the fixed reference.
+refView = imref3d(size(fixed));
+normFixed = single(fixed) / max(single(fixed(:)));
+fixedMask = normFixed > graythresh(normFixed(:));
 
 % Define volxel size
 voxelSize = [dx dy dz];
@@ -231,12 +260,21 @@ if isempty(gcp('nocreate'))
 end
 pctRunOnAll warning('off', 'all');
 
-parfor ii = 2:numVolumes
+% Remove broadcast variables to reduce parfor message-passing overhead
+FI = options.fixedImage;
 
-    moving = IM(:,:,:,ii);
-
-    % Compute rigid transform
-    tform{ii} = imregtform(moving, fixed, 'rigid', optimizer, metric);
+parfor ii = 1:numVolumes
+    % Compute rigid transform if necessary
+    if ii == FI
+        tform{ii} = affine3d(eye(4));   % the reference frame, by definition
+        regQuality(ii) = 1;
+    else
+        moving = IM(:,:,:,ii);
+        tform{ii} = imregtform(moving, fixed, 'rigid', optimizer, metric);
+        % insert quality option here
+        movingReg = imwarp(moving, tform{ii}, 'OutputView', refView);
+        regQuality(ii) = maskedCorr(single(fixed(fixedMask)), single(movingReg(fixedMask)));
+    end
 end
 
 % Compute DVARS
@@ -306,7 +344,9 @@ for ii = 2:numVolumes
 end
 
 coregTime = toc(coregStart);
-fprintf('Time to perform coregistrations: %0.1f seconds, or %0.1f sec/volume.\n', coregTime, coregTime/numVolumes);
+if options.timing && ~options.silent
+    fprintf('Time to perform coregistrations: %0.1f seconds, or %0.1f sec/volume.\n', coregTime, coregTime/numVolumes);
+end
 dataPrepStartTime = tic;
 
 % Update stats struct with new info
@@ -321,6 +361,7 @@ if options.pdfOutput
     stats.translationRedScrubList = [];
     stats.rotationRedScrubList    = [];
     stats.dvarsRedScrubList       = [];
+    stats.regQualRedScrubList     = [];
     stats.fdRedScrubList          = [];
     stats.rmsFDRedScrubList       = [];
 end
@@ -356,6 +397,17 @@ presegmentedScrubList = find(yellowOutliers);
 stats.dvarsYellowScrubList = setdiff(presegmentedScrubList, stats.dvarsRedScrubList);
 stats.dvarsScrubPercentage = 100*[numel(stats.dvarsYellowScrubList)/numVolumes, ...
                                    numel(stats.dvarsRedScrubList)/numVolumes];
+
+% Registration quality scrub 
+% (note: '<', not '>' - low correlation is bad)
+redOutliers = regQuality < options.regQualThresh(2);
+stats.regQualRedScrubList = find(redOutliers);
+yellowOutliers = regQuality < options.regQualThresh(1);
+presegmentedScrubList = find(yellowOutliers);
+stats.regQualYellowScrubList = setdiff(presegmentedScrubList, stats.regQualRedScrubList);
+stats.regQualScrubPercentage = 100*[numel(stats.regQualYellowScrubList)/numVolumes, ...
+                                     numel(stats.regQualRedScrubList)/numVolumes];
+stats.meanRegQuality = mean(regQuality);
 
 % Absolute FD scrub
 redOutliers = abs(FD) > fdThresh(2);
@@ -410,6 +462,20 @@ if ~options.silent || options.pdfOutput
     dvarsYYellow = [-options.dvarsThresh(2) -options.dvarsThresh(2) options.dvarsThresh(2) options.dvarsThresh(2)];
     dvarsYGreen  = [-options.dvarsThresh(1) -options.dvarsThresh(1) options.dvarsThresh(1) options.dvarsThresh(1)];
 
+    % Registration quality is a correlation coefficient (bounded to roughly
+    % [-1, 1]), and HIGH values are good - opposite sense from the other
+    % metrics - so the zones stack red-bottom to green-top instead of
+    % expanding outward from zero. Since the metric is naturally bounded,
+    % a fixed large span is simpler and safer here than the "*50" overshoot
+    % trick used above, which assumes an unbounded, always-positive base
+    % value - that trick would actually break for a value already near 1.
+    yRegQualMax = 1.05;
+    yRegQualMin = min([regQuality(:); options.regQualThresh(2) - 0.1]);
+
+    regQualYRed    = [-50 -50 50 50];
+    regQualYYellow = [options.regQualThresh(2) options.regQualThresh(2) 50 50];
+    regQualYGreen  = [options.regQualThresh(1) options.regQualThresh(1) 50 50];
+
     yFDMax = max(abs(FD(:)));
     if yFDMax < fdThresh(2)
         yFDMax = fdThresh(2)*1.5;
@@ -444,7 +510,8 @@ if ~options.silent || options.pdfOutput
     end
 
     % Plot translations
-    subplot(5,1,1);
+    t = tiledlayout(6, 1, 'Padding', 'compact', 'TileSpacing', 'compact');
+    nexttile;
     ytickformat('%.1f')
     patch(X, transYRed,    colorRed,    'EdgeColor', 'none', 'FaceAlpha', 0.3);
     hold('on');
@@ -471,7 +538,7 @@ if ~options.silent || options.pdfOutput
 
 
     % Plot rotations
-    subplot(5,1,2);
+    nexttile;
     ytickformat('%.1f')
     patch(X, rotYRed,    colorRed,    'EdgeColor', 'none', 'FaceAlpha', 0.3);
     hold('on');
@@ -496,7 +563,7 @@ if ~options.silent || options.pdfOutput
     set(gca, 'Layer', 'top');
 
     %Plot DVARS
-    subplot(5,1,3);
+    nexttile;
     ytickformat('%.1f')
     patch(X, dvarsYRed,    colorRed,    'EdgeColor', 'none', 'FaceAlpha', 0.3);
     hold('on');
@@ -515,8 +582,26 @@ if ~options.silent || options.pdfOutput
     title(['DVARS: ' num2str(100-stats.dvarsScrubPercentage(2),3) '% Good'],'FontSize', 13);
     set(gca, 'Layer', 'top');
 
+    % Plot Reg quality
+    nexttile;
+    ytickformat('%.2f')   % correlation needs 2 decimals - 1 decimal can't distinguish 0.85 from 0.95
+    patch(X, regQualYRed,    colorRed,    'EdgeColor', 'none', 'FaceAlpha', 0.3);
+    hold('on');
+    patch(X, regQualYYellow, colorYellow, 'EdgeColor', 'none', 'FaceAlpha', 1);
+    patch(X, regQualYGreen,  colorGreen,  'EdgeColor', 'none', 'FaceAlpha', 1);
+    plot(regQuality, 'LineWidth', 1.5, 'Color', 'k');
+    if (options.regQualThresh(2) - yRegQualMin) > 0.5
+        set(gca, 'YTick', [yRegQualMin yRegQualMax]);
+    else
+        set(gca, 'YTick', [yRegQualMin, options.regQualThresh(2), options.regQualThresh(1), yRegQualMax]);
+    end
+    set(gca, 'XLim', [0, numVolumes], 'YLim', [yRegQualMin yRegQualMax]);
+    ylabel('Reg. Quality (r)','FontSize', 12);
+    title(['Registration Quality: ' num2str(100-stats.regQualScrubPercentage(2),3) '% Good'],'FontSize', 13);
+    set(gca, 'Layer', 'top');
+
     % Plot FD
-    subplot(5,1,4);
+    nexttile;
     ytickformat('%.1f')
     patch(X, fdYRed,    colorRed,    'EdgeColor', 'none', 'FaceAlpha', 0.3);
     hold('on');
@@ -535,7 +620,7 @@ if ~options.silent || options.pdfOutput
 
 
     % Plot rmsFD
-    subplot(5,1,5);
+    nexttile;
     ytickformat('%.1f')
     patch(X, rmsYRed,    colorRed,    'EdgeColor', 'none', 'FaceAlpha', 0.3);
     hold('on');
@@ -557,6 +642,7 @@ if ~options.silent || options.pdfOutput
         transScrubTable    = Table(buildScrubTable(stats.translationRedScrubList));
         rotationScrubTable = Table(buildScrubTable(stats.rotationRedScrubList));
         dvarsScrubTable    = Table(buildScrubTable(stats.dvarsRedScrubList));
+        regQualScrubTable  = Table(buildScrubTable(stats.regQualRedScrubList));
         fdScrubTable       = Table(buildScrubTable(stats.fdRedScrubList));
         rmsFDScrubTable    = Table(buildScrubTable(stats.rmsFDRedScrubList));
 
@@ -587,13 +673,17 @@ if ~options.silent || options.pdfOutput
         add(CH4, dvarsScrubTable);
         add(reportHandle, CH4);
 
-        CH5 = Chapter('Absolute Framewise Displacement Scrub Data');
-        add(CH5, fdScrubTable);
+        CH5 = Chapter('Registration Quality Scrub Data');
+        add(CH5, regQualScrubTable);
         add(reportHandle, CH5);
 
-        CH6 = Chapter('RMS Framewise Displacement Scrub Data');
-        add(CH6, rmsFDScrubTable);
+        CH6 = Chapter('Absolute Framewise Displacement Scrub Data');
+        add(CH6, fdScrubTable);
         add(reportHandle, CH6);
+
+        CH7 = Chapter('RMS Framewise Displacement Scrub Data');
+        add(CH7, rmsFDScrubTable);
+        add(reportHandle, CH7);
         
         close(reportHandle);
         delete(tempFile);
@@ -602,8 +692,10 @@ end
 
 dataPrepTime = toc(dataPrepStartTime);
 totalTime = toc(startTime);
-fprintf('Time to output results: %0.1f sec.\n', dataPrepTime);
-fprintf('Total time elapsed: %0.1f sec.\n', totalTime);
+if options.timing && ~options.silent
+    fprintf('Time to output results: %0.1f sec.\n', dataPrepTime);
+    fprintf('Total time elapsed: %0.1f sec.\n', totalTime);
+end
 
 stats.times.dataRead = imageReadTime;
 stats.times.coreg    = coregTime;
@@ -613,16 +705,20 @@ stats.times.total    = totalTime;
 % Write json file if silent or if requested
 if options.silent || options.jsonOutput
     stats = orderfields(stats, {'filename', 'software', 'times', 'meanTranslation', 'meanRotataion', ...
-                                'meanDvarsPct', 'meanFD', 'meanRmsFD', ...
+                                'meanDvarsPct', 'meanFD', 'meanRmsFD', 'meanRegQuality', ...
                                 'translationScrubPercentage', 'rotationScrubPercentage', ...
-                                'fdScrubPercentage', 'rmsFDScrubPercentage', 'dvarsScrubPercentage'...
+                                'fdScrubPercentage', 'rmsFDScrubPercentage', 'dvarsScrubPercentage', ...
+                                'regQualScrubPercentage', ...
                                 'translationRedScrubList', 'translationYellowScrubList', ...
                                 'rotationRedScrubList', 'rotationYellowScrubList', ...
                                 'dvarsRedScrubList', 'dvarsYellowScrubList', ...
                                 'fdRedScrubList', 'fdYellowScrubList', ...
-                                'rmsFDRedScrubList', 'rmsFDYellowScrubList'});
+                                'rmsFDRedScrubList', 'rmsFDYellowScrubList', ...
+                                'regQualRedScrubList', 'regQualYellowScrubList'});
     stats.translations = translations;
     stats.rotations = rotations;
+    stats.dvarsPct = dvarsPct;
+    stats.regQuality = regQuality;
     stats.FD = FD;
     stats.rmsFD = rmsFD;
 
@@ -717,4 +813,13 @@ function tableData = buildScrubTable(list)
         body = num2cell(list);
     end
     tableData = [header; body];
+end
+
+
+function r = maskedCorr(a, b)
+% Function written to avoid the need for the Statistics or Machine Learning
+% toolboxes
+    a = a - mean(a);
+    b = b - mean(b);
+    r = sum(a.*b) / sqrt(sum(a.^2) * sum(b.^2));
 end

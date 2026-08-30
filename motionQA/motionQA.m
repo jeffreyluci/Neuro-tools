@@ -52,6 +52,10 @@ function motionQA(pathToFile, options)
 %          layout properties. Added coregistration quality metric. Moved
 %          timing feature to an option. Fixed figure display bug that was
 %          inconsistent with silent option.
+%20260830: Added IMA support. Eliminated case sensitivity of file
+%          extensions. Added autoscaling of plots to screen size.
+%          Streamlined DICOM file read error handling. Fixed handling of
+%          truncated run issues.
 
 % Note that below, unlike the other thresholds, regQualThresh are LOWER 
 % bounds - values below element 2 are red (poor registration), below 
@@ -65,6 +69,18 @@ arguments
     options.jsonOutput (1,1) logical = true
     options.pdfOutput  (1,1) logical = true
     options.timing     (1,1) logical = false
+end
+
+%First check if all dependencies are installed and available
+%Specifically, look for the report generation toolbox if needed here
+if options.pdfOutput || ~options.silent
+    haveLicense   = license('test', 'MATLAB_Report_Gen');
+    haveInstalled = ~isempty(ver('rptgen'));
+    if ~haveLicense || ~haveInstalled
+        error('motionQA:missingReportGenerator', ...
+            'MATLAB Report Generator is required for PDF output (licensed: %d, installed: %d).', ...
+            haveLicense, haveInstalled);
+    end
 end
 
 if ~isempty(pathToFile)
@@ -101,31 +117,39 @@ colorGreen  = [0   0.9 0];
 
 if isempty(pathToFile)
     % Get image file - if DICOM, only first file is needed.
-    [imageFile, imageDir] = uigetfile({'*.dcm;*.dicom;*.nii;*.nii.gz', 'Image files'; ...
-                                       '*.dcm;*.dicom',                'DICOM files'; ...
-                                       '*.nii;*.nii.gz',               'NIfTI files'; ...
+    % [imageFile, imageDir] = uigetfile({'*.dcm;*.dicom;*.ima;*.nii;*.nii.gz', 'Image files'; ...
+    %                                    '*.dcm;*.dicom;*.ima',                'DICOM files'; ...
+    %                                    '*.nii;*.nii.gz',               'NIfTI files'; ...
+    %                                    '*.*',                          'All files'} , ...
+    %                                    'Browse to first image file ...', ...
+    %                                   ['.', filesep], ...
+    %                                   'MultiSelect', 'off');
+    [imageFile, imageDir] = uigetfile({'*.dcm;*.DCM;*.dicom;*.DICOM;*.ima;*.IMA;*.nii;*.nii.gz;*.NII;*.NII.GZ', 'Image files'; ...
+                                       '*.dcm;*.DCM;*.dicom;*.DICOM;*.ima;*.IMA',                'DICOM files'; ...
+                                       '*.nii;*.nii.gz;*.NII;*.NII.GZ',               'NIfTI files'; ...
                                        '*.*',                          'All files'} , ...
                                        'Browse to first image file ...', ...
                                       ['.', filesep], ...
-                                      'MultiSelect', 'off');
+                                       'MultiSelect', 'off');
     if isempty(imageFile) || strcmp(num2str(imageFile), '0')
         return;
     end
+    [~,~,ext] = fileparts(imageFile);
 else 
-    [imageDir, imageFile] = fileparts(pathToFile);
+    [imageDir, fileName, ext] = fileparts(pathToFile);
+    imageFile = [fileName, ext];
 end
-[~,~,ext] = fileparts(imageFile);
 
 % Log for stats if needed later
 stats.filename = [imageDir, imageFile];
-% d=dir(imageDir);
-% d=d(3:end);
 
 % Read in image data and header
 startTime = tic;
-if strcmp(ext, '.dcm') || strcmp(ext, '.dicom') % DICOM Block
-    d=dir(imageDir);
-    d=d(3:end);
+if strcmpi(ext, '.dcm') || strcmpi(ext, '.dicom') || strcmpi(ext, '.ima')% DICOM Block
+    %d=dir([imageDir, ['*', ext]]);
+    d = dir(imageDir);
+    d = d(~[d.isdir]);
+    d = d(endsWith({d.name}, ext, 'IgnoreCase', true));
     hdr = dicominfo([imageDir, d(1).name]);
     dx = hdr.PerFrameFunctionalGroupsSequence.Item_1.PixelMeasuresSequence.Item_1.PixelSpacing(2);
     dy = hdr.PerFrameFunctionalGroupsSequence.Item_1.PixelMeasuresSequence.Item_1.PixelSpacing(1);
@@ -136,27 +160,24 @@ if strcmp(ext, '.dcm') || strcmp(ext, '.dicom') % DICOM Block
                       hdr.NumberOfFrames, ...
                       hdr.NumberOfTemporalPositions));
     currentOrder = zeros(hdr.NumberOfTemporalPositions,1);
-    readList  = true(hdr.NumberOfTemporalPositions,1);
 
     for ii = 1:numel(d)
         try
-            IM(:,:,:,ii) = squeeze(dicomread([imageDir, d(ii).name]));
-            currentOrder(ii) = str2double(getDicomTags([imageDir, d(ii).name]));
+            if d(ii).bytes > 16000
+                IM(:,:,:,ii) = squeeze(dicomread([imageDir, d(ii).name]));
+                currentOrder(ii) = str2double(getDicomTags([imageDir, d(ii).name]));
+            end
         catch
-            readList(ii) = false;
             if ~options.silent
                 disp(['Skipping: ', d(ii).name]);
             end
         end
     end
 
-    %Remove skipped data reads
-    IM = IM(:,:,:,readList);
-    currentOrder = currentOrder(readList);
-
-    %Guarantee DICOM images are in temporal order
-    [~,temporalOrder] = sort(currentOrder);
-    IM = IM(:,:,:,temporalOrder);
+    %Remove skipped data reads, then sort survivors by true acquisition order
+    goodIdx = find(currentOrder);
+    [~, sortOrder] = sort(currentOrder(goodIdx));
+    IM = IM(:,:,:, goodIdx(sortOrder));
 
     outFileBaseName = [hdr.PatientID, '_', hdr.SeriesDescription];
 
@@ -688,6 +709,14 @@ if ~options.silent || options.pdfOutput
         close(reportHandle);
         delete(tempFile);
     end    
+end
+
+% After report generation, fit the figure to the vertical size of the screen
+if exist('fig', 'var')
+    screenSize = get(0, 'ScreenSize');  % [left bottom width height], in pixels
+    figWidth  = screenSize(3);
+    figHeight = min(1250, screenSize(4) - 80);  % leave headroom for taskbar/decorations
+    fig.Position = [100 100 figWidth figHeight];
 end
 
 dataPrepTime = toc(dataPrepStartTime);

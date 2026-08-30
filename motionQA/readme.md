@@ -54,3 +54,8 @@ Version History:<br>
           layout properties. Added coregistration quality metric. Moved
           timing feature to an option. Fixed figure display bug that was
           inconsistent with silent option.<br>
+		  
+20260830: Added IMA support. Eliminated case sensitivity of file
+          extensions. Added autoscaling of plots to screen size.
+          Streamlined DICOM file read error handling. Fixed handling of
+          truncated run issues.<br>

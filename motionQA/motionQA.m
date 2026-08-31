@@ -56,6 +56,7 @@ function motionQA(pathToFile, options)
 %          extensions. Added autoscaling of plots to screen size.
 %          Streamlined DICOM file read error handling. Fixed handling of
 %          truncated run issues.
+%20260831: Fixed figure window resize error.
 
 % Note that below, unlike the other thresholds, regQualThresh are LOWER 
 % bounds - values below element 2 are red (poor registration), below 
@@ -92,7 +93,7 @@ end
 stats.software.name = 'motionQA';
 stats.software.author = 'Jeffrey Luci <jeffrey.luci@rutgers.edu>';
 stats.software.URL = 'TBD GitHub';
-stats.software.version = '20260828';
+stats.software.version = '20260831';
 
 if options.pdfOutput
     import mlreportgen.dom.* %#ok<*SIMPT>
@@ -714,9 +715,10 @@ end
 % After report generation, fit the figure to the vertical size of the screen
 if exist('fig', 'var')
     screenSize = get(0, 'ScreenSize');  % [left bottom width height], in pixels
-    figWidth  = screenSize(3);
+    figWidth  = fig.Position(3);
     figHeight = min(1250, screenSize(4) - 80);  % leave headroom for taskbar/decorations
     fig.Position = [100 100 figWidth figHeight];
+    movegui('center');
 end
 
 dataPrepTime = toc(dataPrepStartTime);

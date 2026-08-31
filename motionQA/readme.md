@@ -59,3 +59,5 @@ Version History:<br>
           extensions. Added autoscaling of plots to screen size.
           Streamlined DICOM file read error handling. Fixed handling of
           truncated run issues.<br>
+		  
+20260831: Fixed figure window sizing error.

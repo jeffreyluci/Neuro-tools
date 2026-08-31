@@ -718,7 +718,7 @@ if exist('fig', 'var')
     figWidth  = fig.Position(3);
     figHeight = min(1250, screenSize(4) - 80);  % leave headroom for taskbar/decorations
     fig.Position = [100 100 figWidth figHeight];
-    movegui('center');
+    movegui(fig, 'center');
 end
 
 dataPrepTime = toc(dataPrepStartTime);

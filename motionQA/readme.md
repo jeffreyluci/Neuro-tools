@@ -5,35 +5,43 @@ typical functional MR imaging series.
 
 # Usage
 `motionQA`
+
 `motionQA(<locataion of image file>)`
+
 `motionQA(options)`
 
 # Options
 **dvarsThresh**  - A 1x2 matrix specifying the quality boundaries for
                         the DVARS metric.
+						
 **regQualThresh** - A 1x2 matrix specifying the quality bodaries and
                         the flagging threshold for the quality of image
                         registration. Note that this metric is reversed
                         compared to the others, where low values indicate
                         low quality, so the order of the low and high
-                        values in this option are "backwards."<br>
+                        values in this option are "backwards."
+						
 **fixedImage**    - Can be an integer, specifying the timepoint of the
                         volume to be used as the coregistration reference.
                         Or, optionally, can be one of the words, "first",
                         "middle", or "last" supplied as a char or string
-                        vector. The default is the middle volume.<br>
+                        vector. The default is the middle volume.
+						
 **silent**        - A boolean that will suppress all graphical output
                         so that this tool can be used in a non-interactive
                         workflow. Supression happens when true. Default is
-                        false.<br>
+                        false.
+						
 **jsonOutput**    - A boolean that will demand or suppress generation 
-                        of the json sidecar. Default is false.<br>
+                        of the json sidecar. Default is false.
+						
 **pdfOutput**    - A boolean that will demand or suppress generation
-                        of the PDF report. Default is true.<br>
+                        of the PDF report. Default is true.
+						
 **timing**        - A boolean that selects the command line output of
                         various timing metrics. Note that if the silent
                         option is set true, the timing metrics will not
-                        be printed, regardless of how this is set.<br>
+                        be printed, regardless of how this is set.
 
 Options syntax: All options should be set as arguments. For example ...<br>
                 motionQA(fixedImage = 'first', pdfOutput = false)<br>

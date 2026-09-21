@@ -55,9 +55,10 @@ json sidecar (in the same directory as the source image file(s)) populated
 with useful metadata as well as the metrics. By request, a PDF can also or
 instead be generated with much of the same information.
 
-Written by J. Luci: jeffrey.luci@rutgers.edu<br>
-https://github.com/jeffreyluci/Neuro-tools/tree/main/motionQA<br>
-Version History:<br>
+Written by J. Luci: jeffrey.luci@rutgers.edu
+
+#Version History:  
+
 20260824: Initial Release<br>
 
 20260828: Fixed first image coregistration bug. Switched to tiled layout
